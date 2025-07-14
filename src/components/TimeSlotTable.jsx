@@ -1,77 +1,126 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import FullCalendar from '@fullcalendar/react';
+import timeGridPlugin from '@fullcalendar/timegrid';
+import resourceTimeGridPlugin from '@fullcalendar/resource-timegrid';
+import interactionPlugin from '@fullcalendar/interaction';
 import BookingForm from './BookingForm';
 
-const initialSlots = [
-  { time: '09:00 - 10:00', booked: false },
-  { time: '10:00 - 11:00', booked: true },
-  { time: '11:00 - 12:00', booked: false },
-  { time: '12:00 - 13:00', booked: true },
-  { time: '13:00 - 14:00', booked: false },
-];
+import { db } from '../firebase/config';
+import { collection, addDoc, getDocs } from 'firebase/firestore';
 
 function TimeSlotTable() {
-  const [slots, setSlots] = useState(initialSlots);
+  const [events, setEvents] = useState([]);
   const [selectedSlot, setSelectedSlot] = useState(null);
 
-  const handleBookClick = (index) => {
-    setSelectedSlot(index);
+const fetchEventsFromFirestore = async () => {
+  try {
+    const snapshot = await getDocs(collection(db, 'bookings'));
+    const data = snapshot.docs.map(doc => {
+      const d = doc.data();
+      return {
+        title: `${d.name} (${d.purpose})`,
+        start: d.start.toDate ? d.start.toDate() : new Date(d.start),
+        end: d.end.toDate ? d.end.toDate() : new Date(d.end),
+        resourceId: d.resource
+      };
+    });
+
+    console.log('✅ Events loaded from Firestore:', data); // <--- ADD THIS
+
+    setEvents(data);
+  } catch (err) {
+    console.error('Failed to fetch events:', err);
+  }
+};
+
+
+  useEffect(() => {
+    fetchEventsFromFirestore();
+  }, []);
+
+  const handleSelect = (info) => {
+    setSelectedSlot({
+      start: info.startStr,
+      resourceId: info.resource.id,
+      duration: 60
+    });
   };
 
   const handleCloseForm = () => {
     setSelectedSlot(null);
   };
 
-  const handleFormSubmit = (formData) => {
-    const updated = [...slots];
-    updated[selectedSlot].booked = true;
-    console.log('Booking Info:', {
-      time: updated[selectedSlot].time,
-      ...formData,
+  const handleSubmitBooking = async (formData, finalEndTime) => {
+  try {
+    const response = await fetch('http://localhost:4000/api/book', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: formData.name,
+        purpose: formData.purpose,
+        start: selectedSlot.start,
+        end: finalEndTime,
+        resource: selectedSlot.resourceId
+      })
     });
-    setSlots(updated);
-    setSelectedSlot(null);
-  };
+
+    const result = await response.json();
+
+    if (response.ok && result.success) {
+      await fetchEventsFromFirestore(); // refresh calendar
+      setSelectedSlot(null);
+    } else {
+      throw new Error(result?.error || result?.message || 'Unknown error from server');
+    }
+  } catch (err) {
+    alert('❌ Failed to save booking');
+    console.error(err);
+  }
+};
+
+console.log('📅 Events being rendered in calendar:', events);
 
   return (
-    <div className="p-6 max-w-md mx-auto">
-      <h2 className="text-xl font-bold mb-4">Meeting Room Schedule</h2>
-      <table className="w-full text-left border">
-        <thead>
-          <tr className="bg-gray-200">
-            <th className="p-2 border">Time</th>
-            <th className="p-2 border">Status</th>
-            <th className="p-2 border">Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {slots.map((slot, i) => (
-            <tr key={i} className={slot.booked ? 'bg-red-100' : 'bg-green-100'}>
-              <td className="p-2 border">{slot.time}</td>
-              <td className="p-2 border">{slot.booked ? 'Booked' : 'Free'}</td>
-              <td className="p-2 border">
-                {!slot.booked ? (
-                  <button
-                    className="bg-blue-500 text-white px-3 py-1 rounded"
-                    onClick={() => handleBookClick(i)}
-                  >
-                    Book
-                  </button>
-                ) : (
-                  <span className="text-gray-400 italic">Unavailable</span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      {selectedSlot !== null && (
-        <BookingForm
-          selectedSlot={slots[selectedSlot].time}
-          onClose={handleCloseForm}
-          onSubmit={handleFormSubmit}
+    <div className="calendar-wrapper">
+      <div className="calendar-container">
+        <FullCalendar
+          plugins={[resourceTimeGridPlugin, timeGridPlugin, interactionPlugin]}
+          initialView="resourceTimeGridDay"
+          slotMinTime="05:00:00"
+          slotMaxTime="23:00:00"
+          allDaySlot={false}
+          selectable={true}
+          selectMirror={true}
+          select={handleSelect}
+          events={events}
+          resources={[{ id: '1', title: 'Meeting Room' }]}
+          aspectRatio={1.35}
+          contentHeight="auto"
+          headerToolbar={{
+            left: 'prev,next today',
+            center: 'title',
+            right: ''
+          }}
+          eventTimeFormat={{
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+          }}
         />
-      )}
+
+        {selectedSlot && (
+          <BookingForm
+  slot={selectedSlot}
+  events={events}
+  onClose={handleCloseForm}
+  onSubmit={() => {
+    fetchEventsFromFirestore();
+    setSelectedSlot(null);
+  }}
+/>
+
+        )}
+      </div>
     </div>
   );
 }
