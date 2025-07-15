@@ -38,7 +38,6 @@ function BookingForm({ slot, events, onClose, onSubmit }) {
     e.preventDefault();
     if (hasConflict) return;
 
-    // ✅ Delegate to parent component which has access to currentUser
     onSubmit(formData, calculatedEnd);
   };
 
@@ -47,9 +46,9 @@ function BookingForm({ slot, events, onClose, onSubmit }) {
       <div className="modal">
         <h3>Book Slot</h3>
         <p>
-          Start: {new Date(slot.start).toLocaleString()} <br />
-          End: {calculatedEnd ? new Date(calculatedEnd).toLocaleString() : 'Invalid Date'} <br />
-          Room: {slot.resourceId}
+          <strong>Start:</strong> {new Date(slot.start).toLocaleString()} <br />
+          <strong>End:</strong> {calculatedEnd ? new Date(calculatedEnd).toLocaleString() : 'Invalid'} <br />
+          <strong>Room:</strong> {slot.resourceId}
         </p>
 
         <label>Duration:</label>
@@ -88,13 +87,13 @@ function BookingForm({ slot, events, onClose, onSubmit }) {
 
           {hasConflict && (
             <p style={{ color: 'red' }}>
-              ❌ Conflict: This time overlaps an existing booking.
+              ❌ Conflict: This time overlaps with an existing booking.
             </p>
           )}
 
           <div className="form-buttons">
             <button type="button" onClick={onClose}>Cancel</button>
-            <button type="submit">Confirm</button>
+            <button type="submit" disabled={hasConflict}>Confirm</button>
           </div>
         </form>
       </div>

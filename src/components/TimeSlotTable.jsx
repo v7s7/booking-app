@@ -5,33 +5,25 @@ import resourceTimeGridPlugin from '@fullcalendar/resource-timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import BookingForm from './BookingForm';
 
-import { auth } from '../firebase/config';
+import { auth, db } from '../firebase/config';
 import { onAuthStateChanged } from 'firebase/auth';
-import { db } from '../firebase/config';
-import { collection, addDoc, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 
-function TimeSlotTable() {
+function TimeSlotTable({ isAdmin }) {
   const [events, setEvents] = useState([]);
   const [selectedSlot, setSelectedSlot] = useState(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-const [currentUser, setCurrentUser] = useState(null); 
+  const [currentUser, setCurrentUser] = useState(null);
 
- useEffect(() => {
-  const unsubscribe = onAuthStateChanged(auth, async (user) => {
-    if (user) {
-      setCurrentUser(user); 
-      const userDoc = await getDoc(doc(db, 'users', user.uid));
-      const role = userDoc.data()?.role;
-      setIsAdmin(role === 'admin');
-    } else {
-      setCurrentUser(null);
-      setIsAdmin(false);
-    }
-  });
-
-  return () => unsubscribe();
-}, []);
-
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setCurrentUser(user);
+      } else {
+        setCurrentUser(null);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   const fetchEventsFromFirestore = async () => {
     try {
@@ -39,14 +31,13 @@ const [currentUser, setCurrentUser] = useState(null);
       const data = snapshot.docs.map(doc => {
         const d = doc.data();
         return {
+          id: doc.id,
           title: `${d.name} (${d.purpose})`,
           start: d.start.toDate ? d.start.toDate() : new Date(d.start),
           end: d.end.toDate ? d.end.toDate() : new Date(d.end),
           resourceId: d.resource
         };
       });
-
-      console.log('✅ Events loaded from Firestore:', data);
       setEvents(data);
     } catch (err) {
       console.error('Failed to fetch events:', err);
@@ -58,6 +49,8 @@ const [currentUser, setCurrentUser] = useState(null);
   }, []);
 
   const handleSelect = (info) => {
+    if (isAdmin || !currentUser) return;
+
     setSelectedSlot({
       start: info.startStr,
       resourceId: info.resource.id,
@@ -69,88 +62,96 @@ const [currentUser, setCurrentUser] = useState(null);
     setSelectedSlot(null);
   };
 
- const handleSubmitBooking = async (formData, finalEndTime) => {
-  try {
-    if (!currentUser) {
-      alert("User not authenticated");
+  const handleSubmitBooking = async (formData, finalEndTime) => {
+    try {
+      if (!currentUser) {
+        alert("User not authenticated");
+        return;
+      }
+
+      const response = await fetch('http://localhost:4000/api/book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: formData.name,
+          email: formData.email,
+          purpose: formData.purpose,
+          start: selectedSlot.start,
+          end: finalEndTime,
+          resource: selectedSlot.resourceId,
+          userId: currentUser.uid
+        })
+      });
+
+      const result = await response.json();
+      if (response.ok && result.success) {
+        await fetchEventsFromFirestore();
+        setSelectedSlot(null);
+      } else {
+        throw new Error(result?.error || result?.message || 'Unknown error from server');
+      }
+    } catch (err) {
+      alert('❌ Failed to save booking');
+      console.error(err);
+    }
+  };
+
+  const handleEventDrop = async (info) => {
+    if (!isAdmin) {
+      info.revert();
+      alert("You are not allowed to move bookings.");
       return;
     }
 
-    const response = await fetch('http://localhost:4000/api/book', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: formData.name,
-        purpose: formData.purpose,
-        start: selectedSlot.start,
-        end: finalEndTime,
-        resource: selectedSlot.resourceId,
-        userId: currentUser.uid // ✅ properly defined now
-      })
-    });
+    try {
+      const event = info.event;
+      const response = await fetch('http://localhost:4000/api/update-booking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: event.id,
+          start: event.start,
+          end: event.end
+        })
+      });
 
-    const result = await response.json();
-
-    if (response.ok && result.success) {
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message);
       await fetchEventsFromFirestore();
-      setSelectedSlot(null);
-    } else {
-      throw new Error(result?.error || result?.message || 'Unknown error from server');
+    } catch (err) {
+      console.error("❌ Failed to move event:", err);
+      info.revert();
+      alert("Could not move booking.");
     }
-  } catch (err) {
-    alert('❌ Failed to save booking');
-    console.error(err);
-  }
-};
+  };
 
+  const handleEventClick = async (clickInfo) => {
+    if (!isAdmin) {
+      alert("You are not allowed to delete bookings.");
+      return;
+    }
 
-const handleEventDrop = async (info) => {
-  try {
-    const event = info.event;
+    const confirmDelete = window.confirm(`Delete booking: ${clickInfo.event.title}?`);
+    if (!confirmDelete) return;
 
-    const response = await fetch('http://localhost:4000/api/update-booking', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        title: event.title,
-        start: event.start,
-        end: event.end
-      })
-    });
+    try {
+      const response = await fetch('http://localhost:4000/api/delete-booking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: clickInfo.event.id
+        })
+      });
 
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message);
 
-    await fetchEventsFromFirestore();
-  } catch (err) {
-    console.error("❌ Failed to move event:", err);
-    alert("Could not update event time.");
-  }
-};
-
-
-const handleEventClick = async (clickInfo) => {
-  const confirmDelete = window.confirm(`Delete booking: ${clickInfo.event.title}?`);
-  if (!confirmDelete) return;
-
-  try {
-    const response = await fetch('http://localhost:4000/api/delete-booking', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        title: clickInfo.event.title
-      }),
-    });
-
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message);
-
-    await fetchEventsFromFirestore();
-  } catch (err) {
-    console.error("❌ Failed to delete booking:", err);
-    alert("Could not delete booking.");
-  }
-};
+      await fetchEventsFromFirestore();
+    } catch (err) {
+      console.error("❌ Failed to delete booking:", err);
+      alert("Could not delete booking.");
+    }
+  };
 
   return (
     <div className="calendar-wrapper">
@@ -161,7 +162,7 @@ const handleEventClick = async (clickInfo) => {
           slotMinTime="05:00:00"
           slotMaxTime="23:00:00"
           allDaySlot={false}
-          selectable={true}
+          selectable={!isAdmin}
           editable={isAdmin}
           eventStartEditable={isAdmin}
           eventDurationEditable={isAdmin}
@@ -178,6 +179,20 @@ const handleEventClick = async (clickInfo) => {
             center: 'title',
             right: ''
           }}
+          eventContent={(arg) => (
+            <div>
+              <b>{arg.timeText}</b>
+              <i> {arg.event.title}</i>
+              {isAdmin && (
+                <span
+                  style={{ marginLeft: '8px', color: 'red', fontWeight: 'bold', cursor: 'pointer' }}
+                  title="Admin controls active"
+                >
+                  🗑️ ✏️
+                </span>
+              )}
+            </div>
+          )}
           eventTimeFormat={{
             hour: '2-digit',
             minute: '2-digit',
@@ -186,14 +201,12 @@ const handleEventClick = async (clickInfo) => {
         />
 
         {selectedSlot && (
-        <BookingForm
-  slot={selectedSlot}
-  events={events}
-  onClose={handleCloseForm}
-  onSubmit={handleSubmitBooking}
-/>
-
-
+          <BookingForm
+            slot={selectedSlot}
+            events={events}
+            onClose={handleCloseForm}
+            onSubmit={handleSubmitBooking}
+          />
         )}
       </div>
     </div>
