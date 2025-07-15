@@ -29,9 +29,10 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// 📝 API: Save to Google Sheets & Firestore
+
+// ✅ BOOKING endpoint
 app.post('/api/book', async (req, res) => {
-  const { name, purpose, start, end, resource } = req.body;
+  const { name, purpose, start, end, resource, userId } = req.body;
 
   try {
     const startTime = new Date(start);
@@ -68,10 +69,10 @@ app.post('/api/book', async (req, res) => {
       start: admin.firestore.Timestamp.fromDate(startTime),
       end: admin.firestore.Timestamp.fromDate(endTime),
       resource,
+      userId, // 🔐 Include user UID for rules
       timestamp: admin.firestore.Timestamp.now()
     });
 
-    // ✅ Success
     res.status(200).send({ success: true });
 
   } catch (err) {
@@ -80,6 +81,66 @@ app.post('/api/book', async (req, res) => {
   }
 });
 
+
+// ✅ UPDATE Booking Time
+app.post('/api/update-booking', async (req, res) => {
+  const { title, start, end } = req.body;
+
+  try {
+    const name = title.split(' (')[0];
+
+    const snapshot = await db.collection('bookings')
+      .where('name', '==', name)
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      return res.status(404).send({ success: false, message: 'Booking not found.' });
+    }
+
+    const docRef = snapshot.docs[0].ref;
+
+    await docRef.update({
+      start: admin.firestore.Timestamp.fromDate(new Date(start)),
+      end: admin.firestore.Timestamp.fromDate(new Date(end)),
+    });
+
+    res.status(200).send({ success: true });
+  } catch (err) {
+    console.error('[UPDATE ERROR]', err);
+    res.status(500).send({ success: false, message: err.message || String(err) });
+  }
+});
+
+
+// ✅ DELETE Booking
+app.post('/api/delete-booking', async (req, res) => {
+  const { title } = req.body;
+
+  try {
+    const name = title.split(' (')[0];
+
+    const snapshot = await db.collection('bookings')
+      .where('name', '==', name)
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      return res.status(404).send({ success: false, message: 'Booking not found.' });
+    }
+
+    const docRef = snapshot.docs[0].ref;
+    await docRef.delete();
+
+    res.status(200).send({ success: true });
+  } catch (err) {
+    console.error('[DELETE ERROR]', err);
+    res.status(500).send({ success: false, message: err.message || String(err) });
+  }
+});
+
+
+// 🔄 Start server
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
 });

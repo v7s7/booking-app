@@ -34,38 +34,12 @@ function BookingForm({ slot, events, onClose, onSubmit }) {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
     if (hasConflict) return;
 
-    try {
-      const response = await fetch('http://localhost:4000/api/book', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: formData.name,
-          email: formData.email,
-          purpose: formData.purpose,
-          start: slot.start,
-          end: calculatedEnd,
-          resource: slot.resourceId
-        })
-      });
-
-      const result = await response.json();
-
-     if (response.ok && result.success) {
-  alert('✅ Booking saved!');
-  onSubmit(); // calls fetchEventsFromFirestore + close form
-} else {
-  const errorMsg = result?.error || result?.message || 'Unknown error';
-  alert('❌ Failed to save booking: ' + errorMsg);
-}
-
-    } catch (err) {
-      alert('❌ Network error.');
-      console.error(err);
-    }
+    // ✅ Delegate to parent component which has access to currentUser
+    onSubmit(formData, calculatedEnd);
   };
 
   return (
@@ -77,6 +51,7 @@ function BookingForm({ slot, events, onClose, onSubmit }) {
           End: {calculatedEnd ? new Date(calculatedEnd).toLocaleString() : 'Invalid Date'} <br />
           Room: {slot.resourceId}
         </p>
+
         <label>Duration:</label>
         <select value={duration} onChange={e => setDuration(parseInt(e.target.value))}>
           <option value={30}>30 minutes</option>
@@ -84,6 +59,7 @@ function BookingForm({ slot, events, onClose, onSubmit }) {
           <option value={90}>1.5 hours</option>
           <option value={120}>2 hours</option>
         </select>
+
         <form onSubmit={handleSubmit}>
           <input
             type="text"
@@ -109,7 +85,13 @@ function BookingForm({ slot, events, onClose, onSubmit }) {
             onChange={handleChange}
             required
           />
-          {hasConflict && <p style={{ color: 'red' }}>❌ Conflict: This time overlaps an existing booking.</p>}
+
+          {hasConflict && (
+            <p style={{ color: 'red' }}>
+              ❌ Conflict: This time overlaps an existing booking.
+            </p>
+          )}
+
           <div className="form-buttons">
             <button type="button" onClick={onClose}>Cancel</button>
             <button type="submit">Confirm</button>

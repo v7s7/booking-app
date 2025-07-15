@@ -5,34 +5,53 @@ import resourceTimeGridPlugin from '@fullcalendar/resource-timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import BookingForm from './BookingForm';
 
+import { auth } from '../firebase/config';
+import { onAuthStateChanged } from 'firebase/auth';
 import { db } from '../firebase/config';
-import { collection, addDoc, getDocs } from 'firebase/firestore';
+import { collection, addDoc, getDocs, doc, getDoc } from 'firebase/firestore';
 
 function TimeSlotTable() {
   const [events, setEvents] = useState([]);
   const [selectedSlot, setSelectedSlot] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+const [currentUser, setCurrentUser] = useState(null); 
 
-const fetchEventsFromFirestore = async () => {
-  try {
-    const snapshot = await getDocs(collection(db, 'bookings'));
-    const data = snapshot.docs.map(doc => {
-      const d = doc.data();
-      return {
-        title: `${d.name} (${d.purpose})`,
-        start: d.start.toDate ? d.start.toDate() : new Date(d.start),
-        end: d.end.toDate ? d.end.toDate() : new Date(d.end),
-        resourceId: d.resource
-      };
-    });
+ useEffect(() => {
+  const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      setCurrentUser(user); 
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      const role = userDoc.data()?.role;
+      setIsAdmin(role === 'admin');
+    } else {
+      setCurrentUser(null);
+      setIsAdmin(false);
+    }
+  });
 
-    console.log('✅ Events loaded from Firestore:', data); // <--- ADD THIS
+  return () => unsubscribe();
+}, []);
 
-    setEvents(data);
-  } catch (err) {
-    console.error('Failed to fetch events:', err);
-  }
-};
 
+  const fetchEventsFromFirestore = async () => {
+    try {
+      const snapshot = await getDocs(collection(db, 'bookings'));
+      const data = snapshot.docs.map(doc => {
+        const d = doc.data();
+        return {
+          title: `${d.name} (${d.purpose})`,
+          start: d.start.toDate ? d.start.toDate() : new Date(d.start),
+          end: d.end.toDate ? d.end.toDate() : new Date(d.end),
+          resourceId: d.resource
+        };
+      });
+
+      console.log('✅ Events loaded from Firestore:', data);
+      setEvents(data);
+    } catch (err) {
+      console.error('Failed to fetch events:', err);
+    }
+  };
 
   useEffect(() => {
     fetchEventsFromFirestore();
@@ -50,8 +69,13 @@ const fetchEventsFromFirestore = async () => {
     setSelectedSlot(null);
   };
 
-  const handleSubmitBooking = async (formData, finalEndTime) => {
+ const handleSubmitBooking = async (formData, finalEndTime) => {
   try {
+    if (!currentUser) {
+      alert("User not authenticated");
+      return;
+    }
+
     const response = await fetch('http://localhost:4000/api/book', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -60,14 +84,15 @@ const fetchEventsFromFirestore = async () => {
         purpose: formData.purpose,
         start: selectedSlot.start,
         end: finalEndTime,
-        resource: selectedSlot.resourceId
+        resource: selectedSlot.resourceId,
+        userId: currentUser.uid // ✅ properly defined now
       })
     });
 
     const result = await response.json();
 
     if (response.ok && result.success) {
-      await fetchEventsFromFirestore(); // refresh calendar
+      await fetchEventsFromFirestore();
       setSelectedSlot(null);
     } else {
       throw new Error(result?.error || result?.message || 'Unknown error from server');
@@ -78,7 +103,54 @@ const fetchEventsFromFirestore = async () => {
   }
 };
 
-console.log('📅 Events being rendered in calendar:', events);
+
+const handleEventDrop = async (info) => {
+  try {
+    const event = info.event;
+
+    const response = await fetch('http://localhost:4000/api/update-booking', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: event.title,
+        start: event.start,
+        end: event.end
+      })
+    });
+
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message);
+
+    await fetchEventsFromFirestore();
+  } catch (err) {
+    console.error("❌ Failed to move event:", err);
+    alert("Could not update event time.");
+  }
+};
+
+
+const handleEventClick = async (clickInfo) => {
+  const confirmDelete = window.confirm(`Delete booking: ${clickInfo.event.title}?`);
+  if (!confirmDelete) return;
+
+  try {
+    const response = await fetch('http://localhost:4000/api/delete-booking', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: clickInfo.event.title
+      }),
+    });
+
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message);
+
+    await fetchEventsFromFirestore();
+  } catch (err) {
+    console.error("❌ Failed to delete booking:", err);
+    alert("Could not delete booking.");
+  }
+};
 
   return (
     <div className="calendar-wrapper">
@@ -90,6 +162,11 @@ console.log('📅 Events being rendered in calendar:', events);
           slotMaxTime="23:00:00"
           allDaySlot={false}
           selectable={true}
+          editable={isAdmin}
+          eventStartEditable={isAdmin}
+          eventDurationEditable={isAdmin}
+          eventDrop={isAdmin ? handleEventDrop : null}
+          eventClick={isAdmin ? handleEventClick : null}
           selectMirror={true}
           select={handleSelect}
           events={events}
@@ -109,15 +186,13 @@ console.log('📅 Events being rendered in calendar:', events);
         />
 
         {selectedSlot && (
-          <BookingForm
+        <BookingForm
   slot={selectedSlot}
   events={events}
   onClose={handleCloseForm}
-  onSubmit={() => {
-    fetchEventsFromFirestore();
-    setSelectedSlot(null);
-  }}
+  onSubmit={handleSubmitBooking}
 />
+
 
         )}
       </div>
